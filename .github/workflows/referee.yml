@@ -1,0 +1,95 @@
+# Builds the Referee "claims" site for the Navier–Stokes half of this repository and publishes it
+# to GitHub Pages.
+#
+# Claims-only, not a full site. `formalization.yaml` names this project's main results, and
+# `--claims-only` restricts the build to those and the declarations their *statements* rest on — 13
+# declarations out of the 32,154 the library exposes. The rest is proof machinery, which a referee
+# checking what the project claims does not need a page for. See
+# https://github.com/LeanMachineLearning/exposition/blob/main/docs/claims.md
+#
+# Only the NavierStokes root is exposed. Referee takes one root module prefix, and this repository
+# has two libraries; `formalization.yaml`'s two `Euler.*` main results are therefore reported on the
+# Claims page as results this build does not expose. To publish the Euler half as well, copy this
+# job with `root: Euler` and a different `site-dest`.
+#
+# ┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+# │ BEFORE THIS CAN RUN: `claims-only` needs a referee *release* that has it.                    │
+# │                                                                                             │
+# │ The action downloads a prebuilt binary, and the version it picks is the tag the action was   │
+# │ pinned at — but only for tag-shaped refs. `@main` is not a release, so it resolves to the    │
+# │ most recent one, which predates `--claims-only`; `collect` would fail with                   │
+# │ "Unknown or incomplete option: --claims-only".                                               │
+# │                                                                                             │
+# │ So: merge the claims-scope work in LeanMachineLearning/exposition, push a tag (that cuts a   │
+# │ release binary), then change `@main` below to that tag. Pinning to a tag is what the         │
+# │ exposition docs recommend anyway — it stops the site generator moving under a published      │
+# │ site.                                                                                       │
+# └─────────────────────────────────────────────────────────────────────────────────────────────┘
+
+name: Referee site
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# `contents: read` is enough: this build folds no provenance ledger, so nothing is pushed back.
+# The three Pages permissions are what `deploy-pages` needs.
+permissions:
+  contents: read
+  actions: read       # read the previous run's data, for the revision diff
+  pages: write
+  id-token: write
+
+# One deployment at a time; let a running one finish rather than publishing a half-built site.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build the Lean project
+        uses: leanprover/lean-action@v1
+        with:
+          build: true
+
+      - name: Build the Referee claims site
+        uses: LeanMachineLearning/exposition@main
+        with:
+          root: NavierStokes
+          # The challenge modules restate project theorems under the same names; importing them
+          # alongside the solution would put two declarations of each name in one environment.
+          exclude-lib: ComparatorChallenges
+          claims-only: true
+          site-url: https://remydegenne.github.io/NavierStokesAndEuler
+          trust: mathlib
+          site-dest: _site
+          # A scoped build must not fold the ledger. `foldRevision` records only the declarations a
+          # revision exposed, so folding 13 of 32,154 would freeze the recorded history of
+          # everything outside the scope. `collect` warns if you turn this back on.
+          provenance: false
+          # Only the revision diff would use them, and that costs a second toolchain-matched tool to
+          # download and run. Turn this on to compare revisions on semantic hashes instead of on
+          # pretty-printed types.
+          semantic-hashes: false
+          # Interactive Lean inside each extracted minimal file, and the check that it compiles.
+          # Off by default because it elaborates one file per published declaration, each importing
+          # Mathlib into its own multi-gigabyte process — which is precisely what claims-only makes
+          # affordable: 13 files here rather than 32,154. Turn it on with `jobs` sized against the
+          # runner's RAM, not its cores.
+          highlight-extracted: false
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
